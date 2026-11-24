@@ -1256,7 +1256,8 @@ pub fn get_full_name() -> String {
 }
 
 pub fn is_setup(name: &str) -> bool {
-    !config::is_disable_installation() && name.to_lowercase().ends_with("install.exe")
+    !config::is_disable_installation()
+        && (name.to_lowercase().ends_with("install.exe") || name.to_lowercase().ends_with("-setup.exe"))
 }
 
 pub fn get_custom_rendezvous_server(custom: String) -> String {
@@ -2515,21 +2516,12 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
     ThrottledInterval::new(i)
 }
 
-/// VelocitySupport branding: baked-in name, server and "support only" mode.
-/// Server address and key come from compile-time env vars set by the GitHub
-/// workflow (repo variables VELOCITY_SERVER / VELOCITY_KEY), so no secrets or
-/// IPs live in the source code.
+/// Velocity Remote branding: built-in name, server and lockdown (see `crate::velocity`).
+/// Server address and key come from compile-time env vars set by the GitHub workflow
+/// (repo variables VELOCITY_SERVER / VELOCITY_KEY), so no IPs live in the source code.
 fn apply_velocity_branding() {
-    *config::APP_NAME.write().unwrap() = "VelocitySupport".to_owned();
-    {
-        let mut hard = config::HARD_SETTINGS.write().unwrap();
-        // Customers only receive help; they can't start outgoing sessions.
-        hard.insert("conn-type".to_owned(), "incoming".to_owned());
-        // Hide everything a customer doesn't need.
-        hard.insert("disable-settings".to_owned(), "Y".to_owned());
-        hard.insert("disable-account".to_owned(), "Y".to_owned());
-        hard.insert("disable-ab".to_owned(), "Y".to_owned());
-    }
+    *config::APP_NAME.write().unwrap() = crate::velocity::app_name().to_owned();
+    crate::velocity::apply_lockdown();
     let server = option_env!("VELOCITY_SERVER").unwrap_or("");
     let key = option_env!("VELOCITY_KEY").unwrap_or("");
     if !server.is_empty() {
@@ -2540,8 +2532,13 @@ fn apply_velocity_branding() {
     }
 }
 
+/// Velocity builds never read `custom.txt`: its settings could loosen the lockdown.
 pub fn load_custom_client() {
     apply_velocity_branding();
+}
+
+#[allow(dead_code)]
+fn load_custom_client_upstream() {
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());

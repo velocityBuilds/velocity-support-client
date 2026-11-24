@@ -18,6 +18,9 @@ import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/utils/multi_window_manager.dart';
 import 'package:flutter_hbb/utils/platform_channel.dart';
+import 'package:flutter_hbb/velocity/customer_home.dart';
+import 'package:flutter_hbb/velocity/tech_home.dart';
+import 'package:flutter_hbb/velocity/velocity_api.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -59,6 +62,9 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   Widget build(BuildContext context) {
     super.build(context);
     final isIncomingOnly = bind.isIncomingOnly();
+    // Velocity Remote: both apps use their own home screens.
+    if (isVelocityTechnician) return const VelocityTechHome();
+    if (isIncomingOnly) return const VelocityCustomerHome();
     return _buildBlock(
         child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,

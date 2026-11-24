@@ -427,6 +427,8 @@ pub enum Data {
     #[cfg(windows)]
     ControlledSessionCount(usize),
     CmErr(String),
+    /// Velocity Remote: JSON request from the UI, JSON answer from the server process.
+    Velocity(String),
     // CM-side file reading responses (Windows only)
     // These are sent from CM back to Connection when CM handles file reading
     /// Response to ReadFile: contains initial file list or error
@@ -1078,6 +1080,10 @@ async fn handle(data: Data, stream: &mut Connection) {
                 }
             }
         },
+        Data::Velocity(req) => {
+            let resp = crate::velocity::ipc_handle(req).await;
+            allow_err!(stream.send(&Data::Velocity(resp)).await);
+        }
         Data::Options(value) => match value {
             None => {
                 let v = Config::get_options();

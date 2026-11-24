@@ -1,9 +1,10 @@
-# Builds the branded VelocitySupport Windows client.
+# Builds both Velocity Remote Windows apps (customer + technician) from this tree.
 # Run it from the Actions tab ("Run workflow"), or push a tag like v1.0.
 # Set these first in Settings > Secrets and variables > Actions > Variables:
 #   VELOCITY_SERVER  e.g. 129.146.10.20  (your Oracle VM public IP or domain)
 #   VELOCITY_KEY     contents of id_ed25519.pub from the server
-name: Build VelocitySupport (Windows)
+#   VELOCITY_API     Velocity backend origin, e.g. https://my.example.com (HTTPS only)
+name: Build Velocity Remote (Windows)
 
 on:
   workflow_dispatch:
@@ -19,6 +20,7 @@ env:
   VERSION: "1.5.3"
   VELOCITY_SERVER: ${{ vars.VELOCITY_SERVER }}
   VELOCITY_KEY: ${{ vars.VELOCITY_KEY }}
+  VELOCITY_API: ${{ vars.VELOCITY_API }}
 
 permissions:
   contents: write
@@ -29,8 +31,8 @@ jobs:
     steps:
       - name: Make sure server variables are set
         run: |
-          if [ -z "$VELOCITY_SERVER" ] || [ -z "$VELOCITY_KEY" ]; then
-            echo "::error::Set VELOCITY_SERVER and VELOCITY_KEY under Settings > Secrets and variables > Actions > Variables"
+          if [ -z "$VELOCITY_SERVER" ] || [ -z "$VELOCITY_KEY" ] || [ -z "$VELOCITY_API" ]; then
+            echo "::error::Set VELOCITY_SERVER, VELOCITY_KEY and VELOCITY_API under Settings > Secrets and variables > Actions > Variables"
             exit 1
           fi
           echo "Building for server: $VELOCITY_SERVER"
@@ -42,6 +44,14 @@ jobs:
   build-windows:
     needs: [generate-bridge]
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { role: customer, exe: VelocityRemoteSupport-Setup.exe }
+          - { role: technician, exe: VelocityRemoteTechnician-Setup.exe }
+    env:
+      VELOCITY_ROLE: ${{ matrix.role }}
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -96,7 +106,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          prefix-key: windows-2022
+          prefix-key: windows-2022-${{ matrix.role }}
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -112,7 +122,7 @@ jobs:
         run: |
           $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
 
-      - name: Build VelocitySupport
+      - name: Build Velocity Remote (${{ matrix.role }})
         run: |
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
@@ -129,7 +139,7 @@ jobs:
           runner_res=$(find . -name "Runner.res" | head -1)
           [ -n "$runner_res" ] && cp "$runner_res" ./libs/portable/Runner.res || true
 
-      - name: Pack single-file VelocitySupport.exe
+      - name: Pack single-file installer
         shell: bash
         run: |
           sed -i '/dpiAware/d' res/manifest.xml
@@ -138,18 +148,18 @@ jobs:
           python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
           popd
           mkdir -p ./out
-          mv ./target/release/rustdesk-portable-packer.exe ./out/VelocitySupport.exe
-          sha256sum ./out/VelocitySupport.exe
+          mv ./target/release/rustdesk-portable-packer.exe ./out/${{ matrix.exe }}
+          sha256sum ./out/${{ matrix.exe }}
 
       - name: Upload build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: VelocitySupport-windows-x64
-          path: ./out/VelocitySupport.exe
+          name: ${{ matrix.role }}-windows-x64
+          path: ./out/${{ matrix.exe }}
           if-no-files-found: error
 
       - name: Publish release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
-          files: ./out/VelocitySupport.exe
+          files: ./out/${{ matrix.exe }}

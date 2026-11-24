@@ -1700,6 +1700,15 @@ class RustdeskImpl {
     return Future.value(false);
   }
 
+  Future<String> velocityCall(
+      {required String op, required String args, dynamic hint}) {
+    throw UnimplementedError("velocityCall");
+  }
+
+  String velocityRole({dynamic hint}) {
+    return 'customer';
+  }
+
   bool isIncomingOnly({dynamic hint}) {
     return false;
   }

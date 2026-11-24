@@ -3868,6 +3868,7 @@ impl LoginConfigHandler {
             os_login,
             hwid,
             avatar,
+            velocity_token: crate::velocity::login_token(&self.id).into(),
             ..Default::default()
         };
         if self.skips_saved_password() {

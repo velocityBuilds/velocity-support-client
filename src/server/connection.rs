@@ -376,6 +376,8 @@ pub struct Connection {
     unauthorized_id: Option<UnauthorizedID>,
     require_2fa: Option<totp_rs::TOTP>,
     awaiting_2fa: bool,
+    /// Velocity Remote: set only when this connection passed `velocity::verify_login`.
+    velocity_session: Option<crate::velocity::SessionGuard>,
     trusted_device: Option<crate::trusted_devices::host::Attempt>,
     keyboard: bool,
     clipboard: bool,
@@ -578,6 +580,7 @@ impl Connection {
             },
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,
+            velocity_session: None,
             trusted_device: None,
             // Defer display enumeration until login succeeds. Monitor login replaces this
             // with the primary index returned with the refreshed display snapshot.
@@ -1888,6 +1891,13 @@ impl Connection {
         if self.authorized {
             return true;
         }
+        // Velocity Remote: every way into an authorized session passes here (password, click,
+        // recent-session reconnect, 2FA, switch sides). Only a Velocity-approved connection may pass.
+        if crate::velocity::enforced() && self.velocity_session.is_none() {
+            log::warn!("velocity: refused authorization without customer approval");
+            self.send_login_error(crate::velocity::NOT_APPROVED).await;
+            return false;
+        }
         if self.require_2fa.is_some() && !self.is_recent_session(true) && !self.from_switch {
             self.require_2fa.as_ref().map(|totp| {
                 let bot = crate::auth_2fa::TelegramBot::get();
@@ -2980,6 +2990,15 @@ impl Connection {
             if !self.check_id_whitelist().await {
                 return false;
             }
+            if crate::velocity::enforced() && self.velocity_session.is_none() {
+                match crate::velocity::verify_login(&lr.velocity_token, &lr.my_id).await {
+                    Ok(guard) => self.velocity_session = Some(guard),
+                    Err(msg) => {
+                        self.send_login_error(msg).await;
+                        return false;
+                    }
+                }
+            }
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(
@@ -3099,6 +3118,14 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
 
+            if crate::velocity::enforced() {
+                // Reached only with a verified Velocity approval (checked above).
+                if !self.send_logon_response_and_keep_alive().await {
+                    return false;
+                }
+                self.try_start_cm(lr.my_id.clone(), lr.my_name.clone(), self.authorized);
+                return true;
+            }
             if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
                 || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
             {
@@ -5446,6 +5473,9 @@ impl Connection {
             return;
         }
         self.closed = true;
+        if let Some(v) = self.velocity_session.as_mut() {
+            v.reason = reason.to_owned();
+        }
         #[cfg(windows)]
         self.privacy_preparation.take();
         // If voice A,B -> C, and A,B has voice call

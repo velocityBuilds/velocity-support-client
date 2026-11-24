@@ -2554,6 +2554,15 @@ pub fn main_support_remove_wallpaper() -> bool {
     support_remove_wallpaper()
 }
 
+/// Velocity Remote: one entry point for the Velocity screens. `args` and the result are JSON.
+pub fn velocity_call(op: String, args: String) -> String {
+    crate::velocity::ui_call(&op, &args)
+}
+
+pub fn velocity_role() -> SyncReturn<String> {
+    SyncReturn(crate::velocity::ROLE.to_owned())
+}
+
 pub fn is_incoming_only() -> SyncReturn<bool> {
     SyncReturn(config::is_incoming_only())
 }
