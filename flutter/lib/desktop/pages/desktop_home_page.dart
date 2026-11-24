@@ -129,7 +129,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Container(
-        width: isIncomingOnly ? 280.0 : 200.0,
+        width: isIncomingOnly ? 320.0 : 200.0,
         color: Theme.of(context).colorScheme.background,
         child: Stack(
           children: [
@@ -189,7 +189,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     final model = gFFI.serverModel;
     return Container(
       margin: const EdgeInsets.only(left: 20, right: 11),
-      height: 57,
+      height: bind.isIncomingOnly() ? 72 : 57,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
@@ -238,9 +238,13 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.only(top: 10, bottom: 10),
                         ),
-                        style: TextStyle(
-                          fontSize: 22,
-                        ),
+                        style: bind.isIncomingOnly()
+                            ? const TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 2,
+                                color: MyTheme.accent)
+                            : const TextStyle(fontSize: 22),
                       ).workaroundFreezeLinuxMint(),
                     ),
                   )
@@ -336,7 +340,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                               contentPadding:
                                   EdgeInsets.only(top: 14, bottom: 10),
                             ),
-                            style: TextStyle(fontSize: 15),
+                            style: bind.isIncomingOnly()
+                                ? const TextStyle(
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 3)
+                                : const TextStyle(fontSize: 15),
                           ).workaroundFreezeLinuxMint(),
                         ),
                       ),
@@ -386,8 +395,60 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     );
   }
 
+  Widget buildVelocityWelcome(BuildContext context) {
+    final muted =
+        Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.75);
+    Widget step(String n, String text) => Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 20,
+                height: 20,
+                alignment: Alignment.center,
+                decoration: const BoxDecoration(
+                    color: MyTheme.accent, shape: BoxShape.circle),
+                child: Text(n,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(text,
+                      style: TextStyle(fontSize: 13, color: muted, height: 1.3))),
+            ],
+          ),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(left: 20, right: 16, top: 16, bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Velocity Support",
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Text("We're here to help.",
+              style: TextStyle(fontSize: 13, color: muted)),
+          const SizedBox(height: 6),
+          step("1", "Tell your technician the ID and password below."),
+          step("2", "Click \"Accept\" if a window asks to allow access."),
+          step("3", "Close this app any time to end the session."),
+        ],
+      ),
+    );
+  }
+
   buildTip(BuildContext context) {
     final isOutgoingOnly = bind.isOutgoingOnly();
+    if (bind.isIncomingOnly()) {
+      return buildVelocityWelcome(context);
+    }
     return Padding(
       padding:
           const EdgeInsets.only(left: 20.0, right: 16, top: 16.0, bottom: 5),
