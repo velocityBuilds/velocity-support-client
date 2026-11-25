@@ -79,8 +79,19 @@ pub fn apply_lockdown() {
     over.insert("allow-auto-update".into(), "N".into());
     // RustDesk's own console sync/audit stays off; Velocity's backend is the authority.
     over.insert("register-device".into(), "N".into());
+    // Smooth sessions: always use the graphics card's H.265/H.264 encoder and decoder when there is one.
+    over.insert("enable-hwcodec".into(), "Y".into());
     if is_technician() {
         hard.insert("conn-type".into(), "outgoing".into());
+        // Session defaults (the technician can still change them from the toolbar):
+        // fit the customer's screen in the window instead of panning as the mouse moves,
+        // and aim for 60 fps (up to 120 from the quality menu; the stream adapts down by itself).
+        let mut display = config::DEFAULT_DISPLAY_SETTINGS.write().unwrap();
+        display.insert("view_style".into(), "adaptive".into());
+        display.insert("scroll_style".into(), "scrollbar".into());
+        display.insert("image_quality".into(), "custom".into());
+        display.insert("custom_image_quality".into(), "50".into());
+        display.insert("custom-fps".into(), "60".into());
         return;
     }
     hard.insert("conn-type".into(), "incoming".into());

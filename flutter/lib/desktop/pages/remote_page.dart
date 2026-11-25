@@ -762,7 +762,7 @@ class _RemotePageState extends State<RemotePage>
                   inputModel: _ffi.inputModel,
                   child: getBodyForDesktop(context))),
           // Velocity Remote: whose computer and which ticket (technician build only).
-          VelocitySessionBanner(peerId: widget.id),
+          VelocitySessionBanner(peerId: widget.id, ffi: _ffi),
           Stack(
             children: [
               _ffi.ffiModel.pi.isSet.isTrue &&
