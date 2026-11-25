@@ -40,30 +40,26 @@ class VColors {
   static const danger = Color(0xFFC0352B);
 }
 
-/// The "V" brand mark used across Velocity apps.
+/// The Velocity PC Build & Repair logo (assets/velocity_logo.png). [size] is its height.
 class VelocityMark extends StatelessWidget {
   final double size;
   const VelocityMark({super.key, this.size = 40});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: size,
+    return Image.asset(
+      'assets/velocity_logo.png',
       height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(size * 0.26),
-        gradient: const LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF3B82F6), VColors.accentDark]),
+      fit: BoxFit.contain,
+      filterQuality: FilterQuality.medium,
+      // Falls back to a plain "V" if the image is ever missing.
+      errorBuilder: (_, __, ___) => Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(color: VColors.accent, borderRadius: BorderRadius.circular(size * 0.26)),
+        child: Text('V', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: size * 0.55, height: 1.0)),
       ),
-      child: Text('V',
-          style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-              fontSize: size * 0.55,
-              height: 1.0)),
     );
   }
 }
@@ -75,8 +71,8 @@ class VelocityHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(children: [
-      const VelocityMark(size: 40),
-      const SizedBox(width: 12),
+      const VelocityMark(size: 52),
+      const SizedBox(width: 14),
       Expanded(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(title,
