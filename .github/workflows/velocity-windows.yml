@@ -1,7 +1,7 @@
 # Builds both Velocity Remote Windows apps (customer + technician) from this tree.
 # Run it from the Actions tab ("Run workflow"), or push a tag like v1.0.
 # Set these first in Settings > Secrets and variables > Actions > Variables:
-#   VELOCITY_SERVER  e.g. 129.146.10.20  (your Oracle VM public IP or domain)
+#   VELOCITY_SERVER  e.g. 45.76.10.20  (your Vultr server IP or domain)
 #   VELOCITY_KEY     contents of id_ed25519.pub from the server
 #   VELOCITY_API     Velocity backend origin, e.g. https://my.example.com (HTTPS only)
 name: Build Velocity Remote (Windows)

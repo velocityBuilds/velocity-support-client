@@ -1,77 +1,88 @@
-# VelocitySupport — Setup Guide
+# Velocity Remote — Setup Guide
 
-Your two parts:
-1. **Server** (free, on Oracle Cloud). It connects you and your customers.
-2. **Client** (`VelocitySupport.exe`). Customers double-click it and read you their ID and password.
+The parts:
+1. **Remote server** (on Vultr). It connects technician and customer PCs, including through home routers.
+2. **Velocity platform** (already live on staging). It handles linking, tickets, approvals and history.
+3. **Two Windows apps**, built on GitHub:
+   - `VelocityRemoteSupport-Setup.exe` for customers
+   - `VelocityRemoteTechnician-Setup.exe` for staff
 
 ---
 
-## Part 1: Oracle Cloud server (about 20 minutes)
+## Part 1: Vultr server (about 15 minutes)
 
-### 1. Sign up
-- Go to https://signup.cloud.oracle.com. A card is required for verification. Always Free resources are not charged.
-- **Pick your home region carefully, because you can't change it later.** Choose the one closest to your customers.
-- Optional: upgrade to *Pay As You Go* later. You stay free inside the limits, Oracle stops reclaiming "idle" free VMs, and Ampere capacity is easier to get.
+### 1. Create the server
+In the Vultr dashboard: **Deploy +** → **Deploy New Server**.
+- **Type:** Cloud Compute, Shared CPU, Regular. The smallest plan is enough for remote support; check the current monthly price on the page.
+- **Location:** the city closest to you and your customers.
+- **Image:** Ubuntu 24.04 LTS x64.
+- **SSH Keys:** optional. Without one, Vultr shows a root password on the server's page.
+- **Hostname / label:** for example `velocity-remote`.
+- Leave **Firewall Group** empty. The install script opens the ports on the server itself.
+- Click **Deploy Now**. When the status says Running, copy the **IP Address** from the server's page.
 
-### 2. Create the VM
-Console → **Compute → Instances → Create instance**
-- **Image:** Canonical Ubuntu 24.04
-- **Shape:** Ampere `VM.Standard.A1.Flex`, 1 OCPU / 6 GB (Always Free).
-  If you see "Out of capacity", choose `VM.Standard.E2.1.Micro` (AMD, also free). That's plenty for remote support.
-- **Networking:** create a new VCN with a public subnet, and keep **Assign a public IPv4 address** on.
-- **SSH keys:** click **Save private key** and keep that file safe.
-- Click **Create**. Copy the **Public IP address** when the instance shows Running.
-
-### 3. Open the ports in Oracle's firewall
-Instance page → click the **Subnet** → **Security Lists** → **Default Security List** → **Add Ingress Rules**:
-
-| Source CIDR | Protocol | Destination port |
-|---|---|---|
-| 0.0.0.0/0 | TCP | 21114-21119 |
-| 0.0.0.0/0 | UDP | 21116 |
-
-### 4. Install the server
+### 2. Install the RustDesk server
 In PowerShell on your PC:
 ```powershell
-ssh -i C:\path\to\ssh-key.key ubuntu@YOUR_PUBLIC_IP
+ssh root@YOUR_SERVER_IP
 ```
-On the VM:
+Type `yes` the first time, then paste the root password from the Vultr page (it won't show as you type).
+
+On the server:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/velocityBuilds/velocity-support-client/velocity/velocity/install-rustdesk-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/velocityBuilds/velocity-support-client/velocity/velocity/install-rustdesk-server.sh | bash
 ```
-When it finishes, it prints **VELOCITY_SERVER** and **VELOCITY_KEY**. Copy both.
+When it finishes, it prints **VELOCITY_SERVER** and **VELOCITY_KEY**. Send both to Claude, or put them in GitHub yourself (Part 2).
 
-> Back up `/opt/rustdesk-server/data/id_ed25519` and `id_ed25519.pub`. If you lose them, every client has to be rebuilt.
+> Back up `/opt/rustdesk-server/data/id_ed25519` and `id_ed25519.pub`. If you lose them, both apps have to be rebuilt and reinstalled.
 
-**Recommended:** point a domain at the IP (for example `remote.yourdomain.com`, an A record). On Cloudflare, set it to **DNS only (grey cloud)**. Then use the domain as VELOCITY_SERVER, so a changed IP never means a rebuild.
+**If you add a Vultr Firewall Group later**, allow these from anywhere:
+
+| Protocol | Port |
+|---|---|
+| TCP | 22 (SSH) |
+| TCP | 21114-21119 |
+| UDP | 21116 |
+
+**Recommended:** point a domain name at the IP (for example `remote.yourdomain.com`, an A record). On Cloudflare, set it to **DNS only (grey cloud)**, because the Cloudflare proxy can't carry remote-desktop traffic. Then use the domain as VELOCITY_SERVER, so a new server or IP never means a rebuild.
+
+**Keep it updated:** log in once a month and run `apt update && apt upgrade -y`, then `cd /opt/rustdesk-server && docker compose pull && docker compose up -d`.
 
 ---
 
-## Part 2: Build the branded client
+## Part 2: Build the apps
 1. Open https://github.com/velocityBuilds/velocity-support-client/settings/variables/actions
-2. Set **VELOCITY_SERVER** (your IP or domain) and **VELOCITY_KEY** (the long key).
-3. Go to **Actions → Build VelocitySupport (Windows) → Run workflow**. It takes about 60 minutes.
-4. Download `VelocitySupport.exe` from the finished run's **Artifacts**.
-   For a permanent download link, push a tag instead:
-   `git tag v1.0 && git push fork v1.0`. That creates a GitHub Release with the exe attached.
+2. Set:
+   - **VELOCITY_SERVER**: your server IP or domain
+   - **VELOCITY_KEY**: the long key
+   - **VELOCITY_API**: the Velocity platform address (already set to staging)
+3. Go to **Actions → Build Velocity Remote (Windows) → Run workflow**. It takes about an hour.
+4. Download both installers from the finished run's **Artifacts**.
 
-**Your logo:** save a square PNG as `branding/icon-source.png`, run
-`python branding/make_icon.py rustdesk-src`, then commit and push.
+For a permanent download link, push a tag (`git tag v1.0 && git push fork v1.0`). That creates a GitHub Release with both installers attached.
+
+**Your logo:** save a square PNG as `branding/icon-source.png`, run `python branding/make_icon.py rustdesk-src`, then commit and push.
 
 ---
 
-## Part 3: How you connect (technician side)
-Install the normal RustDesk app on **your** PC from https://rustdesk.com, then open
-**Settings → Network → ID/Relay server**:
-- ID server: your VELOCITY_SERVER
-- Relay server: your VELOCITY_SERVER
-- Key: your VELOCITY_KEY
+## Part 3: Day-to-day use
+**Linking a customer PC (once):**
+1. In the admin site, open the customer's computer page and click **Make link code**.
+2. The customer installs `VelocityRemoteSupport-Setup.exe` and types the code.
 
-Customer flow: they run `VelocitySupport.exe` and read you the ID and password. You type the ID, connect, and enter the password.
+**Getting help:**
+- The customer clicks **Request Support**, which creates a ticket.
+
+**Connecting:**
+1. Open **Velocity Remote Technician** on your PC and sign in with your staff account.
+2. In the admin site, click **Connect** on the ticket or the computer and give a reason.
+3. The customer sees your name, the ticket and the reason, and clicks **Accept**.
+4. The remote window opens by itself in the technician app.
+5. The customer can disconnect at any time. Every new session needs a new Accept.
 
 ---
 
 ## Notes
-- **SmartScreen warning:** an unsigned exe shows "Windows protected your PC" (More info → Run anyway). To remove it, buy a code-signing certificate (Certum open-source cert is about $30/yr; Azure Trusted Signing is about $10/mo) and add signing to the workflow.
-- **Open-source license (AGPL-3.0):** your fork is public, which satisfies the license. The small "Powered by RustDesk" line is kept on purpose.
-- **Unattended access** (connecting without the customer there): on the customer's PC, install VelocitySupport (it offers to install), then set a permanent password during a session.
+- **Windows warning:** an unsigned installer shows "Windows protected your PC" (More info → Run anyway). A code-signing certificate removes it, and is required before any automatic updates.
+- **No unattended access:** passwords and connecting without the customer's Accept are switched off on purpose.
+- **Open-source license (AGPL-3.0):** the fork is public, which satisfies the license. The small "Powered by RustDesk" line is kept on purpose.

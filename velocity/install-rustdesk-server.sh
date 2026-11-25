@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# VelocitySupport - RustDesk self-hosted server installer
-# For Oracle Cloud Free Tier, Ubuntu 22.04/24.04 (Ampere ARM or AMD).
-# Usage on the VM:  curl -fsSL <raw-url> | sudo bash     (or: sudo bash install-rustdesk-server.sh)
+# Velocity Remote - RustDesk self-hosted server installer
+# For a Vultr (or any) Ubuntu 22.04/24.04 server, x86 or ARM.
+# Usage on the server:  curl -fsSL <raw-url> | sudo bash     (or: sudo bash install-rustdesk-server.sh)
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then echo "Run with sudo"; exit 1; fi
@@ -16,15 +16,26 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 systemctl enable --now docker
 
-echo "==> Opening firewall ports on the VM (Oracle images block them by default)"
-apt-get install -y iptables-persistent netfilter-persistent >/dev/null 2>&1 || true
-open_port() { # proto port
-  iptables -C INPUT -p "$1" --dport "$2" -j ACCEPT 2>/dev/null || \
-    iptables -I INPUT 5 -p "$1" -m state --state NEW --dport "$2" -j ACCEPT
-}
-for p in 21114 21115 21116 21117 21118 21119; do open_port tcp $p; done
-open_port udp 21116
-netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4
+echo "==> Opening firewall ports on the server"
+if command -v ufw >/dev/null && ufw status | grep -q "Status: active"; then
+  # Vultr's Ubuntu images ship with ufw on (only SSH allowed).
+  ufw allow 22/tcp >/dev/null
+  ufw allow 21114:21119/tcp >/dev/null
+  ufw allow 21116/udp >/dev/null
+  ufw reload >/dev/null
+  echo "    ufw: opened TCP 21114-21119 and UDP 21116"
+else
+  # Plain iptables (e.g. Oracle images); kept so the script works on other hosts too.
+  apt-get install -y iptables-persistent netfilter-persistent >/dev/null 2>&1 || true
+  open_port() { # proto port
+    iptables -C INPUT -p "$1" --dport "$2" -j ACCEPT 2>/dev/null || \
+      iptables -I INPUT 5 -p "$1" -m state --state NEW --dport "$2" -j ACCEPT
+  }
+  for p in 21114 21115 21116 21117 21118 21119; do open_port tcp $p; done
+  open_port udp 21116
+  netfilter-persistent save >/dev/null 2>&1 || iptables-save > /etc/iptables/rules.v4
+  echo "    iptables: opened TCP 21114-21119 and UDP 21116"
+fi
 
 echo "==> Starting RustDesk server (hbbs + hbbr)"
 mkdir -p /opt/rustdesk-server/data
