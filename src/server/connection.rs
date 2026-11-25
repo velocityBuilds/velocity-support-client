@@ -2999,6 +2999,16 @@ impl Connection {
                     }
                 }
             }
+            // Velocity Remote: file transfer only when the customer ticked "Allow file transfer".
+            if let Some(allow_files) = self.velocity_session.as_ref().map(|g| g.info.allow_files) {
+                if !allow_files {
+                    self.file = false;
+                    if matches!(lr.union, Some(login_request::Union::FileTransfer(_))) {
+                        self.send_login_error("The customer did not allow file transfer for this session.").await;
+                        return false;
+                    }
+                }
+            }
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(

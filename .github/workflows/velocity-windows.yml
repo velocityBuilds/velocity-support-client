@@ -1,5 +1,7 @@
 # Builds both Velocity Remote Windows apps (customer + technician) from this tree.
-# Run it from the Actions tab ("Run workflow"), or push a tag like v1.0.
+# Run it from the Actions tab ("Run workflow"), or push a tag like app-v2.0.0 to publish a release
+# (the newest release is what .../releases/latest/download/<file> points at).
+# The app version shown to customers comes from velocity/VERSION.
 # Set these first in Settings > Secrets and variables > Actions > Variables:
 #   VELOCITY_SERVER  e.g. 45.76.10.20  (your Vultr server IP or domain)
 #   VELOCITY_KEY     contents of id_ed25519.pub from the server
@@ -9,7 +11,7 @@ name: Build Velocity Remote (Windows)
 on:
   workflow_dispatch:
   push:
-    tags: ["v*"]
+    tags: ["v*", "app-v*"]
 
 env:
   SCITER_RUST_VERSION: "1.75"
@@ -48,8 +50,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { role: customer, exe: VelocityRemoteSupport-Setup.exe }
-          - { role: technician, exe: VelocityRemoteTechnician-Setup.exe }
+          - { role: customer, exe: VelocityRemoteSupport-Setup.exe, product: "Velocity Remote Support" }
+          - { role: technician, exe: VelocityRemoteTechnician-Setup.exe, product: "Velocity Remote Technician" }
     env:
       VELOCITY_ROLE: ${{ matrix.role }}
     steps:
@@ -64,6 +66,30 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
+
+      - name: Velocity app version and file details
+        shell: bash
+        run: |
+          v=$(tr -d '[:space:]' < velocity/VERSION)
+          echo "VELOCITY_APP_VERSION=$v" >> "$GITHUB_ENV"
+          # Windows file properties show Velocity, not the upstream project.
+          PRODUCT="${{ matrix.product }}" python3 - <<'PY'
+          import os, re
+          p = 'flutter/windows/runner/Runner.rc'
+          s = open(p, encoding='utf-8', errors='replace').read()
+          vals = {
+              'CompanyName': 'Velocity Builds And Repairs',
+              'FileDescription': os.environ['PRODUCT'],
+              'ProductName': os.environ['PRODUCT'],
+              'LegalCopyright': 'Velocity Builds And Repairs. Based on RustDesk (AGPL-3.0).',
+          }
+          for k, v in vals.items():
+              s = re.sub(r'(VALUE "%s", )"[^"]*"' % k, lambda m: m.group(1) + '"' + v + '"', s)
+          open(p, 'w', encoding='utf-8').write(s)
+          PY
+          sed -i "s/^version: .*/version: $v+${{ github.run_number }}/" flutter/pubspec.yaml
+          grep -n 'CompanyName\|FileDescription\|ProductName\|LegalCopyright' flutter/windows/runner/Runner.rc
+          grep -n '^version:' flutter/pubspec.yaml
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -162,4 +188,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
+          name: Velocity Remote ${{ env.VELOCITY_APP_VERSION }}
+          prerelease: false
           files: ./out/${{ matrix.exe }}

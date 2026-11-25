@@ -159,9 +159,9 @@ class _VelocityTechHomeState extends State<VelocityTechHome> {
                     child: Row(children: [
                       Expanded(
                         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text('${r['customerName']} · ${r['hostname']}',
+                          Text('${r['customerName'] ?? 'Customer'} · ${r['hostname']}',
                               style: const TextStyle(fontWeight: FontWeight.w700, color: VColors.text)),
-                          Text('${r['ticketNumber']} — ${r['ticketSubject']}',
+                          Text(r['ticketNumber'] != null ? '${r['ticketNumber']} — ${r['ticketSubject']}' : 'No ticket yet: one opens when the customer accepts',
                               style: const TextStyle(fontSize: 13, color: VColors.muted)),
                         ]),
                       ),

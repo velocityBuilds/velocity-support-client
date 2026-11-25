@@ -32,7 +32,7 @@ class _VelocitySessionBannerState extends State<VelocitySessionBanner> {
     final info = _info;
     if (info == null) return const SizedBox.shrink();
     final title = '${info['customerName'] ?? ''} · ${info['hostname'] ?? ''}';
-    final ticket = '${info['ticketNumber'] ?? ''} — ${info['ticketSubject'] ?? ''}';
+    final ticket = info['ticketNumber'] != null ? '${info['ticketNumber']} — ${info['ticketSubject'] ?? ''}' : 'Remote session';
     return Positioned(
       left: 12,
       bottom: 12,

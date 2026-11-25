@@ -5,8 +5,9 @@
 //!   * `technician` – Velocity Remote Technician, for staff (outgoing only).
 //!
 //! The customer build talks to the Velocity backend (`VELOCITY_API`) from the *server* process:
-//! it holds the device credential, sends heartbeats, and checks every incoming connection with
-//! [`verify_login`]. A connection is authorized only when BOTH are true:
+//! it registers itself on first start (no code; staff match the PC to a customer in the admin
+//! dashboard), holds the device credential, sends heartbeats, and checks every incoming connection
+//! with [`verify_login`]. A connection is authorized only when BOTH are true:
 //!   1. the backend consumes the single-use token the technician app presented, and
 //!   2. the customer clicked Accept for that request on this PC in the last two minutes
 //!      (recorded only here, in memory, from a local IPC call — the backend cannot fake it).
@@ -34,6 +35,13 @@ pub const ROLE: &str = match option_env!("VELOCITY_ROLE") {
 const API_BASE: &str = match option_env!("VELOCITY_API") {
     Some(v) => v,
     None => "",
+};
+
+/// Velocity's own app version (shown to customers and compared for the update notice). The
+/// upstream RustDesk version (`crate::VERSION`) stays internal.
+pub const APP_VERSION: &str = match option_env!("VELOCITY_APP_VERSION") {
+    Some(v) => v,
+    None => "2.0.0",
 };
 
 const HEARTBEAT_SECS: u64 = 10;
@@ -103,7 +111,7 @@ async fn http(method: &str, path: &str, body: Option<Value>, auth: Option<&str>,
         "GET" => client.get(&url),
         _ => client.post(&url),
     };
-    req = req.timeout(Duration::from_secs(HTTP_TIMEOUT_SECS)).header("user-agent", format!("{}/{}", app_name(), crate::VERSION));
+    req = req.timeout(Duration::from_secs(HTTP_TIMEOUT_SECS)).header("user-agent", format!("{}/{}", app_name(), APP_VERSION));
     if let Some(a) = auth {
         req = req.header("authorization", a);
     }
@@ -134,20 +142,69 @@ fn os_version() -> String {
     info.get("os").and_then(|v| v.as_str()).unwrap_or("Windows").chars().take(120).collect()
 }
 
+/// Make, model, serial, CPU and RAM, read once with a hidden PowerShell call (no extra crates).
+/// Sent at registration so staff can fill in the computer record; the customer sees it in Settings.
+fn hardware_info() -> Value {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let script = "$cs=Get-CimInstance Win32_ComputerSystem; $b=Get-CimInstance Win32_BIOS; \
+            $p=Get-CimInstance Win32_Processor | Select-Object -First 1; \
+            [pscustomobject]@{m=$cs.Manufacturer; mo=$cs.Model; s=$b.SerialNumber; c=$p.Name; \
+            r=[math]::Round($cs.TotalPhysicalMemory/1GB)} | ConvertTo-Json -Compress";
+        let out = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        if let Ok(o) = out {
+            if let Ok(v) = serde_json::from_slice::<Value>(&o.stdout) {
+                let clean = |k: &str, max: usize| -> Value {
+                    let t = v.get(k).and_then(|x| x.as_str()).unwrap_or("").trim().to_owned();
+                    let junk = ["", "to be filled by o.e.m.", "default string", "system serial number", "system product name", "system manufacturer", "none", "0"];
+                    if junk.contains(&t.to_lowercase().as_str()) {
+                        Value::Null
+                    } else {
+                        Value::String(t.chars().take(max).collect())
+                    }
+                };
+                let ram = v.get("r").and_then(|x| x.as_i64()).filter(|r| *r > 0 && *r < 65536);
+                return json!({
+                    "manufacturer": clean("m", 80),
+                    "model": clean("mo", 120),
+                    "serialNumber": clean("s", 100),
+                    "cpu": clean("c", 120),
+                    "ramGb": ram,
+                });
+            }
+        }
+    }
+    json!({})
+}
+
 /* --------------------------------------------- customer state (server process) */
 
 #[derive(Default)]
 struct State {
     online: bool,
-    revoked: bool,
+    registering: bool,
     last_error: String,
     pending: Option<Value>,
     ticket: Option<Value>,
-    /// requestId -> when the customer clicked Accept on this PC.
-    approvals: HashMap<String, Instant>,
+    /// {state: unmatched|claimed|confirmed, firstName}
+    matched: Value,
+    help_requested: bool,
+    update: Option<Value>,
+    hardware: Option<Value>,
+    /// requestId -> (when the customer clicked Accept on this PC, whether they allowed file transfer).
+    approvals: HashMap<String, (Instant, bool)>,
     active: Option<SessionInfo>,
+    /// The last session that ended (for the "Velocity disconnected" notice in the app).
+    last_ended: Option<Value>,
     last_ui_poll: Option<Instant>,
     ui_launched_for: Option<String>,
+    /// Do not hammer /register after a refusal.
+    next_register: Option<Instant>,
 }
 
 lazy_static::lazy_static! {
@@ -172,23 +229,91 @@ pub fn start_heartbeat() {
     });
 }
 
+/// First start (or after this PC was unlinked): register and keep the credential.
+async fn register_once() {
+    {
+        let s = STATE.lock().unwrap();
+        if s.next_register.map_or(false, |t| Instant::now() < t) {
+            return;
+        }
+    }
+    STATE.lock().unwrap().registering = true;
+    let hw = {
+        let cached = STATE.lock().unwrap().hardware.clone();
+        match cached {
+            Some(h) => h,
+            None => {
+                let h = tokio::task::spawn_blocking(hardware_info).await.unwrap_or(json!({}));
+                STATE.lock().unwrap().hardware = Some(h.clone());
+                h
+            }
+        }
+    };
+    let mut body = json!({ "rustdeskId": Config::get_id(), "hostname": crate::common::hostname(), "osVersion": os_version(), "appVersion": APP_VERSION });
+    if let (Some(b), Some(h)) = (body.as_object_mut(), hw.as_object()) {
+        for (k, v) in h {
+            if !v.is_null() {
+                b.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    let result = http("POST", "/api/device/register", Some(body), None, None).await;
+    let mut s = STATE.lock().unwrap();
+    s.registering = false;
+    match result {
+        Ok((201, v)) => {
+            let credential = v.get("credential").and_then(|c| c.as_str()).unwrap_or("").to_owned();
+            if credential.is_empty() {
+                s.last_error = "Unexpected answer from Velocity.".into();
+                s.next_register = Some(Instant::now() + Duration::from_secs(60));
+                return;
+            }
+            if let Err(e) = store::save(&store::Device { credential }) {
+                s.last_error = format!("Could not save the link on this PC: {e}");
+                s.next_register = Some(Instant::now() + Duration::from_secs(60));
+                return;
+            }
+            s.last_error.clear();
+            s.next_register = None;
+        }
+        Ok((status, v)) => {
+            s.online = false;
+            s.last_error = error_message(&v, &format!("Velocity server error ({status})."));
+            // 409: an earlier copy of this PC is still marked online; it times out within a few minutes.
+            let wait = if status == 409 { 180 } else if status == 429 { 900 } else { 60 };
+            s.next_register = Some(Instant::now() + Duration::from_secs(wait));
+        }
+        Err(e) => {
+            log::warn!("velocity register failed: {e}");
+            s.online = false;
+            s.last_error = "Can't reach Velocity right now. Check your internet connection.".into();
+            s.next_register = Some(Instant::now() + Duration::from_secs(30));
+        }
+    }
+}
+
 async fn heartbeat_once() {
     let Some(auth) = device_auth() else {
-        let mut s = STATE.lock().unwrap();
-        s.online = false;
-        s.pending = None;
+        {
+            let mut s = STATE.lock().unwrap();
+            s.online = false;
+            s.pending = None;
+        }
+        register_once().await;
         return;
     };
-    let body = json!({ "hostname": crate::common::hostname(), "osVersion": os_version(), "appVersion": crate::VERSION });
+    let body = json!({ "hostname": crate::common::hostname(), "osVersion": os_version(), "appVersion": APP_VERSION });
     match http("POST", "/api/device/heartbeat", Some(body), Some(&auth), None).await {
         Ok((200, v)) => {
             let pending = v.get("pendingRequest").cloned().filter(|p| !p.is_null());
             let launch_ui = {
                 let mut s = STATE.lock().unwrap();
                 s.online = true;
-                s.revoked = false;
                 s.last_error.clear();
                 s.ticket = v.get("ticket").cloned().filter(|t| !t.is_null());
+                s.matched = v.get("match").cloned().unwrap_or(Value::Null);
+                s.help_requested = v.get("helpRequested").and_then(|h| h.as_bool()).unwrap_or(false);
+                s.update = v.get("update").cloned().filter(|u| !u.is_null());
                 let new_id = pending.as_ref().and_then(|p| p.get("id")).and_then(|i| i.as_str()).map(|i| i.to_owned());
                 s.pending = pending;
                 // Make sure the customer actually sees the request: open the window if no UI is polling.
@@ -204,11 +329,15 @@ async fn heartbeat_once() {
             }
         }
         Ok((401, _)) => {
+            // Unlinked or blocked by Velocity: forget the credential and register again as a new PC.
+            store::delete();
             let mut s = STATE.lock().unwrap();
             s.online = false;
-            s.revoked = true;
             s.pending = None;
-            s.last_error = "This computer is no longer linked to Velocity. Enter a new code.".into();
+            s.ticket = None;
+            s.matched = Value::Null;
+            s.last_error.clear();
+            s.next_register = Some(Instant::now() + Duration::from_secs(30));
         }
         Ok((status, v)) => {
             let mut s = STATE.lock().unwrap();
@@ -240,10 +369,27 @@ pub async fn ipc_handle(req: String) -> String {
     let args = req.get("args").cloned().unwrap_or(Value::Null);
     let out = match op {
         "state" => Ok(state_json()),
-        "enroll" => enroll(&args).await,
         "ticket" => create_ticket(&args).await,
         "respond" => respond(&args).await,
-        "unenroll" => unenroll().await,
+        "help" => device_post("/api/device/help", json!({}), "Could not reach Velocity.").await,
+        "messages" => device_get("/api/device/tickets/current/messages").await,
+        "reply" => device_post("/api/device/tickets/current/reply", json!({ "body": arg(&args, "body") }), "Could not send your message.").await,
+        "sessions" => device_get("/api/device/sessions").await,
+        "hardware" => {
+            let cached = STATE.lock().unwrap().hardware.clone();
+            match cached {
+                Some(h) => Ok(h),
+                None => {
+                    let h = tokio::task::spawn_blocking(hardware_info).await.unwrap_or(json!({}));
+                    STATE.lock().unwrap().hardware = Some(h.clone());
+                    Ok(h)
+                }
+            }
+        }
+        "dismiss_ended" => {
+            STATE.lock().unwrap().last_ended = None;
+            Ok(json!({ "ok": true }))
+        }
         "refresh" => {
             WAKE.notify_one();
             Ok(json!({ "ok": true }))
@@ -267,17 +413,20 @@ fn state_json() -> Value {
         }
     }
     json!({
-        "enrolled": dev.is_some() && !s.revoked,
-        "customerName": dev.as_ref().map(|d| d.customer_name.clone()).unwrap_or_default(),
-        "computerName": dev.as_ref().map(|d| d.computer_name.clone()).unwrap_or_default(),
+        "linked": dev.is_some(),
+        "registering": s.registering,
+        "match": s.matched,
         "hostname": crate::common::hostname(),
         "rustdeskId": Config::get_id(),
         "online": s.online,
         "lastError": s.last_error,
         "pendingRequest": s.pending,
         "ticket": s.ticket,
-        "activeSession": s.active.as_ref().map(|a| json!({ "technicianName": a.technician_name, "ticketNumber": a.ticket_number })),
-        "version": crate::VERSION,
+        "helpRequested": s.help_requested,
+        "update": s.update,
+        "activeSession": s.active.as_ref().map(|a| json!({ "technicianName": a.technician_name, "ticketNumber": a.ticket_number, "allowFiles": a.allow_files })),
+        "lastEnded": s.last_ended,
+        "version": APP_VERSION,
     })
 }
 
@@ -292,37 +441,32 @@ fn arg<'a>(args: &'a Value, k: &str) -> &'a str {
     args.get(k).and_then(|v| v.as_str()).unwrap_or("")
 }
 
-async fn enroll(args: &Value) -> Result<Value, String> {
-    let body = json!({
-        "code": arg(args, "code"),
-        "rustdeskId": Config::get_id(),
-        "hostname": crate::common::hostname(),
-        "osVersion": os_version(),
-        "appVersion": crate::VERSION,
-    });
-    match http("POST", "/api/device/enroll", Some(body), None, None).await {
-        Ok((201, v)) => {
-            let d = store::Device {
-                credential: v.get("credential").and_then(|c| c.as_str()).unwrap_or("").to_owned(),
-                customer_name: v.get("customerName").and_then(|c| c.as_str()).unwrap_or("").to_owned(),
-                computer_name: v.get("computerName").and_then(|c| c.as_str()).unwrap_or("").to_owned(),
-            };
-            if d.credential.is_empty() {
-                return Err("Unexpected answer from Velocity.".into());
-            }
-            store::save(&d).map_err(|e| format!("Could not save the link on this PC: {e}"))?;
-            STATE.lock().unwrap().revoked = false;
-            WAKE.notify_one();
-            Ok(json!({ "customerName": d.customer_name, "computerName": d.computer_name }))
-        }
-        Ok((_, v)) => Err(error_message(&v, "That code did not work.")),
+async fn device_get(path: &str) -> Result<Value, String> {
+    let auth = device_auth().ok_or("Velocity is still connecting. Try again in a moment.")?;
+    match http("GET", path, None, Some(&auth), None).await {
+        Ok((200, v)) => Ok(v),
+        Ok((_, v)) => Err(error_message(&v, "Velocity server error.")),
+        Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
+    }
+}
+
+async fn device_post(path: &str, body: Value, fallback: &str) -> Result<Value, String> {
+    let auth = device_auth().ok_or("Velocity is still connecting. Try again in a moment.")?;
+    let r = http("POST", path, Some(body), Some(&auth), None).await;
+    WAKE.notify_one();
+    match r {
+        Ok((200 | 201, v)) => Ok(v),
+        Ok((_, v)) => Err(error_message(&v, fallback)),
         Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
     }
 }
 
 async fn create_ticket(args: &Value) -> Result<Value, String> {
-    let auth = device_auth().ok_or("This computer is not linked to Velocity yet.")?;
-    let body = json!({ "category": arg(args, "category"), "subject": arg(args, "subject"), "description": arg(args, "description") });
+    let auth = device_auth().ok_or("Velocity is still connecting. Try again in a moment.")?;
+    let mut body = json!({ "category": arg(args, "category"), "subject": arg(args, "subject"), "description": arg(args, "description") });
+    if let Some(c) = args.get("contact").filter(|c| c.is_object()) {
+        body["contact"] = c.clone();
+    }
     let key = arg(args, "key");
     match http("POST", "/api/device/tickets", Some(body), Some(&auth), Some(key)).await {
         Ok((200 | 201, v)) => {
@@ -335,12 +479,14 @@ async fn create_ticket(args: &Value) -> Result<Value, String> {
 }
 
 async fn respond(args: &Value) -> Result<Value, String> {
-    let auth = device_auth().ok_or("This computer is not linked to Velocity yet.")?;
+    let auth = device_auth().ok_or("Velocity is still connecting. Try again in a moment.")?;
     let id = arg(args, "requestId").to_owned();
     if id.len() != 36 {
         return Err("Unknown request.".into());
     }
     let accept = args.get("accept").and_then(|a| a.as_bool()).unwrap_or(false);
+    // File transfer is off unless the customer ticked the box in the Accept dialog.
+    let allow_files = accept && args.get("allowFiles").and_then(|a| a.as_bool()).unwrap_or(false);
     let path = format!("/api/device/requests/{}/{}", id, if accept { "approve" } else { "decline" });
     let result = http("POST", &path, Some(json!({})), Some(&auth), None).await;
     {
@@ -348,8 +494,8 @@ async fn respond(args: &Value) -> Result<Value, String> {
         s.pending = None;
         if accept && matches!(result, Ok((200, _))) {
             // The local half of the approval. Only this IPC call (the customer's click) creates it.
-            s.approvals.retain(|_, t| t.elapsed() < Duration::from_secs(LOCAL_APPROVAL_SECS));
-            s.approvals.insert(id.clone(), Instant::now());
+            s.approvals.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(LOCAL_APPROVAL_SECS));
+            s.approvals.insert(id.clone(), (Instant::now(), allow_files));
         }
     }
     WAKE.notify_one();
@@ -368,6 +514,7 @@ async fn unenroll() -> Result<Value, String> {
     let mut s = STATE.lock().unwrap();
     s.pending = None;
     s.ticket = None;
+    s.matched = Value::Null;
     s.online = false;
     Ok(json!({ "ok": true }))
 }
@@ -395,6 +542,9 @@ pub struct SessionInfo {
     pub session_id: String,
     pub technician_name: String,
     pub ticket_number: String,
+    /// The customer ticked "Allow file transfer" when they accepted.
+    pub allow_files: bool,
+    pub started: Instant,
 }
 
 /// Held by an authorized `Connection`; reports the end of the session when dropped.
@@ -411,6 +561,9 @@ impl Drop for SessionGuard {
             let mut s = STATE.lock().unwrap();
             if s.active.as_ref().map_or(false, |a| a.session_id == info.session_id) {
                 s.active = None;
+                // Shown by the app as "Velocity disconnected. The session lasted N minutes."
+                let minutes = (info.started.elapsed().as_secs() + 59) / 60;
+                s.last_ended = Some(json!({ "sessionId": info.session_id, "technicianName": info.technician_name, "minutes": minutes.max(1) }));
             }
         }
         std::thread::spawn(move || {
@@ -447,14 +600,17 @@ pub async fn verify_login(token: &[u8], peer_id: &str) -> Result<SessionGuard, &
         }
     };
     let request_id = v.get("requestId").and_then(|x| x.as_str()).unwrap_or("").to_owned();
+    let mut s = STATE.lock().unwrap();
+    // The local half: the customer must have clicked Accept for this request on this PC, recently.
+    let local = s.approvals.remove(&request_id).filter(|(t, _)| t.elapsed() < Duration::from_secs(LOCAL_APPROVAL_SECS));
+    let clicked = local.is_some();
     let info = SessionInfo {
         session_id: v.get("sessionId").and_then(|x| x.as_str()).unwrap_or("").to_owned(),
         technician_name: v.get("technicianName").and_then(|x| x.as_str()).unwrap_or("").to_owned(),
         ticket_number: v.get("ticketNumber").and_then(|x| x.as_str()).unwrap_or("").to_owned(),
+        allow_files: local.map_or(false, |(_, f)| f),
+        started: Instant::now(),
     };
-    let mut s = STATE.lock().unwrap();
-    // The local half: the customer must have clicked Accept for this request on this PC, recently.
-    let clicked = s.approvals.remove(&request_id).map_or(false, |t| t.elapsed() < Duration::from_secs(LOCAL_APPROVAL_SECS));
     if !clicked || info.session_id.is_empty() {
         log::warn!("velocity: backend approved {request_id} but there is no local Accept for it");
         drop(s);
@@ -514,7 +670,7 @@ async fn tech_call(op: &str, args: &Value) -> Result<Value, String> {
         }
         "me" => {
             let t = TECH.lock().unwrap();
-            Ok(json!({ "signedIn": t.token.is_some(), "user": t.user, "rustdeskId": Config::get_id(), "version": crate::VERSION }))
+            Ok(json!({ "signedIn": t.token.is_some(), "user": t.user, "rustdeskId": Config::get_id(), "version": APP_VERSION }))
         }
         "ready" => {
             let b = bearer().ok_or("signed_out")?;
