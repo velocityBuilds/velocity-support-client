@@ -6,11 +6,11 @@
 use hbb_common::{config::Config, log};
 use serde_derive::{Deserialize, Serialize};
 
-/// Only the credential is kept. Files written by older versions also had the customer's name; serde
-/// ignores those extra fields.
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Device {
     pub credential: String,
+    pub customer_name: String,
+    pub computer_name: String,
 }
 
 const FILE: &str = "velocity-device.dat";
