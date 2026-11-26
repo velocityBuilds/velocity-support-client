@@ -36,6 +36,12 @@ const API_BASE: &str = match option_env!("VELOCITY_API") {
     None => "",
 };
 
+/// Velocity's own app version (from velocity/VERSION in CI); falls back to RustDesk's for local builds.
+pub const APP_VERSION: &str = match option_env!("VELOCITY_APP_VERSION") {
+    Some(v) => v,
+    None => crate::VERSION,
+};
+
 const HEARTBEAT_SECS: u64 = 10;
 const LOCAL_APPROVAL_SECS: u64 = 120;
 const HTTP_TIMEOUT_SECS: u64 = 15;
@@ -114,7 +120,7 @@ async fn http(method: &str, path: &str, body: Option<Value>, auth: Option<&str>,
         "GET" => client.get(&url),
         _ => client.post(&url),
     };
-    req = req.timeout(Duration::from_secs(HTTP_TIMEOUT_SECS)).header("user-agent", format!("{}/{}", app_name(), crate::VERSION));
+    req = req.timeout(Duration::from_secs(HTTP_TIMEOUT_SECS)).header("user-agent", format!("{}/{}", app_name(), APP_VERSION));
     if let Some(a) = auth {
         req = req.header("authorization", a);
     }
@@ -190,7 +196,7 @@ async fn heartbeat_once() {
         s.pending = None;
         return;
     };
-    let body = json!({ "hostname": crate::common::hostname(), "osVersion": os_version(), "appVersion": crate::VERSION });
+    let body = json!({ "hostname": crate::common::hostname(), "osVersion": os_version(), "appVersion": APP_VERSION });
     match http("POST", "/api/device/heartbeat", Some(body), Some(&auth), None).await {
         Ok((200, v)) => {
             let pending = v.get("pendingRequest").cloned().filter(|p| !p.is_null());
@@ -253,6 +259,7 @@ pub async fn ipc_handle(req: String) -> String {
         "state" => Ok(state_json()),
         "enroll" => enroll(&args).await,
         "ticket" => create_ticket(&args).await,
+        "guest_ticket" => guest_ticket(&args).await,
         "respond" => respond(&args).await,
         "unenroll" => unenroll().await,
         "refresh" => {
@@ -288,7 +295,7 @@ fn state_json() -> Value {
         "pendingRequest": s.pending,
         "ticket": s.ticket,
         "activeSession": s.active.as_ref().map(|a| json!({ "technicianName": a.technician_name, "ticketNumber": a.ticket_number })),
-        "version": crate::VERSION,
+        "version": APP_VERSION,
     })
 }
 
@@ -309,7 +316,7 @@ async fn enroll(args: &Value) -> Result<Value, String> {
         "rustdeskId": Config::get_id(),
         "hostname": crate::common::hostname(),
         "osVersion": os_version(),
-        "appVersion": crate::VERSION,
+        "appVersion": APP_VERSION,
     });
     match http("POST", "/api/device/enroll", Some(body), None, None).await {
         Ok((201, v)) => {
@@ -340,6 +347,33 @@ async fn create_ticket(args: &Value) -> Result<Value, String> {
             WAKE.notify_one();
             Ok(v)
         }
+        Ok((_, v)) => Err(error_message(&v, "Could not send your request.")),
+        Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
+    }
+}
+
+/// "Get help" before the PC is linked: the same public request form as the website (no account or code).
+/// The ticket says which PC it came from so staff can link it afterwards.
+async fn guest_ticket(args: &Value) -> Result<Value, String> {
+    let description = format!(
+        "{}
+
+Sent from Velocity Remote Support on {} (remote ID {}, not linked yet).",
+        arg(args, "description").trim(),
+        crate::common::hostname(),
+        Config::get_id()
+    );
+    let body = json!({
+        "name": arg(args, "name"),
+        "email": arg(args, "email"),
+        "phone": arg(args, "phone"),
+        "category": arg(args, "category"),
+        "subject": arg(args, "subject"),
+        "description": description,
+        "serviceType": "remote",
+    });
+    match http("POST", "/api/public/tickets", Some(body), None, None).await {
+        Ok((200 | 201, v)) => Ok(v),
         Ok((_, v)) => Err(error_message(&v, "Could not send your request.")),
         Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
     }
@@ -525,7 +559,7 @@ async fn tech_call(op: &str, args: &Value) -> Result<Value, String> {
         }
         "me" => {
             let t = TECH.lock().unwrap();
-            Ok(json!({ "signedIn": t.token.is_some(), "user": t.user, "rustdeskId": Config::get_id(), "version": crate::VERSION }))
+            Ok(json!({ "signedIn": t.token.is_some(), "user": t.user, "rustdeskId": Config::get_id(), "version": APP_VERSION }))
         }
         "ready" => {
             let b = bearer().ok_or("signed_out")?;

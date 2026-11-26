@@ -313,6 +313,24 @@ class _EnrollViewState extends State<_EnrollView> {
     }
   }
 
+  Future<void> _getHelp() async {
+    final result = await showDialog<String>(context: context, builder: (_) => const _GuestHelpDialog());
+    if (result == null || !mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.check_circle, color: VColors.ok, size: 44),
+        title: const Text('Ticket started'),
+        content: Text(
+            '$result\n\nA Velocity technician will contact you soon. If they need to see your screen, they will give you a code to link this computer.',
+            textAlign: TextAlign.center),
+        actions: [
+          ElevatedButton(style: vPrimaryButton(height: 40), onPressed: () => Navigator.of(ctx).pop(), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final lastError = (widget.state['lastError'] ?? '').toString();
@@ -320,12 +338,29 @@ class _EnrollViewState extends State<_EnrollView> {
       padding: const EdgeInsets.all(24),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const VelocityHeader(title: 'Velocity Remote Support'),
+        const SizedBox(height: 24),
+        VCard(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('Need help with this computer?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: VColors.text)),
+            const SizedBox(height: 6),
+            const Text('Start a support ticket. No account or code needed.',
+                style: TextStyle(fontSize: 13, color: VColors.muted, height: 1.4)),
+            const SizedBox(height: 14),
+            ElevatedButton.icon(
+              style: vPrimaryButton(height: 58),
+              onPressed: _getHelp,
+              icon: const Icon(Icons.support_agent, size: 26),
+              label: const Text('Get help'),
+            ),
+          ]),
+        ),
         const SizedBox(height: 28),
         const Text('Link this computer',
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: VColors.text)),
         const SizedBox(height: 8),
         const Text(
-          'Enter the code Velocity gave you. It links this computer to your account so you can ask for help with one click.',
+          'Have a code from Velocity? Enter it to link this computer to your account, so a technician can connect when you click Accept.',
           style: TextStyle(fontSize: 14, color: VColors.muted, height: 1.4),
         ),
         if (lastError.isNotEmpty) ...[
@@ -335,7 +370,6 @@ class _EnrollViewState extends State<_EnrollView> {
         const SizedBox(height: 20),
         TextField(
           controller: _code,
-          autofocus: true,
           textCapitalization: TextCapitalization.characters,
           style: const TextStyle(fontSize: 22, letterSpacing: 4, fontWeight: FontWeight.w700),
           decoration: vInput('Code', hint: 'ABCD-EFGH'),
@@ -362,6 +396,101 @@ class _EnrollViewState extends State<_EnrollView> {
         const Text("Don't have a code? Call or email Velocity Builds And Repairs.",
             textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: VColors.muted)),
       ]),
+    );
+  }
+}
+
+/* ---------------- Get help before linking (the website's public request form) ---------------- */
+
+class _GuestHelpDialog extends StatefulWidget {
+  const _GuestHelpDialog();
+  @override
+  State<_GuestHelpDialog> createState() => _GuestHelpDialogState();
+}
+
+class _GuestHelpDialogState extends State<_GuestHelpDialog> {
+  final _name = TextEditingController();
+  final _email = TextEditingController();
+  final _phone = TextEditingController();
+  final _subject = TextEditingController();
+  final _description = TextEditingController();
+  String _category = kTicketCategories[1];
+  String _error = '';
+  bool _busy = false;
+
+  Future<void> _send() async {
+    if ([_name, _email, _subject, _description].any((c) => c.text.trim().isEmpty)) {
+      setState(() => _error = 'Please fill in your name, email, summary and what is happening.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    final r = await velocityCall('guest_ticket', {
+      'name': _name.text.trim(),
+      'email': _email.text.trim(),
+      'phone': _phone.text.trim(),
+      'category': _category,
+      'subject': _subject.text.trim(),
+      'description': _description.text.trim(),
+    });
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (r.ok) {
+      final msg = r.data is Map ? (r.data as Map)['message']?.toString() : null;
+      Navigator.of(context).pop(msg ?? 'Thanks! We got your request.');
+    } else {
+      setState(() => _error = r.error);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Get help'),
+      content: SizedBox(
+        width: 400,
+        child: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text(
+              'Start a support ticket. Tell us how to reach you and what is wrong.',
+              style: TextStyle(fontSize: 13, color: VColors.muted, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            TextField(controller: _name, maxLength: 120, decoration: vInput('Your name')),
+            const SizedBox(height: 4),
+            TextField(controller: _email, maxLength: 254, keyboardType: TextInputType.emailAddress, decoration: vInput('Email')),
+            const SizedBox(height: 4),
+            TextField(controller: _phone, maxLength: 40, keyboardType: TextInputType.phone, decoration: vInput('Phone (optional)')),
+            const SizedBox(height: 4),
+            DropdownButtonFormField<String>(
+              value: _category,
+              isExpanded: true,
+              decoration: vInput('What kind of problem?'),
+              items: kTicketCategories.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+              onChanged: (v) => setState(() => _category = v ?? _category),
+            ),
+            const SizedBox(height: 12),
+            TextField(controller: _subject, maxLength: 200, decoration: vInput('Short summary', hint: 'e.g. Computer is very slow')),
+            const SizedBox(height: 4),
+            TextField(
+                controller: _description,
+                maxLines: 5,
+                maxLength: 9000,
+                decoration: vInput('What is happening?', hint: 'When did it start? Any error messages?')),
+            if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: VColors.danger, fontSize: 13)),
+          ]),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: _busy ? null : () => Navigator.of(context).pop(), child: const Text('Cancel')),
+        ElevatedButton(
+          style: vPrimaryButton(height: 40),
+          onPressed: _busy ? null : _send,
+          child: Text(_busy ? 'Starting…' : 'Start ticket'),
+        ),
+      ],
     );
   }
 }
