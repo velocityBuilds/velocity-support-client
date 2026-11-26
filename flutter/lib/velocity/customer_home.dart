@@ -193,7 +193,7 @@ class _VelocityCustomerHomeState extends State<VelocityCustomerHome> {
           style: vPrimaryButton(height: 58),
           onPressed: online && !_busy ? _requestSupport : null,
           icon: const Icon(Icons.support_agent, size: 26),
-          label: const Text('Request Support'),
+          label: const Text('Get help'),
         ),
         const SizedBox(height: 8),
         const Text(
@@ -225,7 +225,7 @@ class _VelocityCustomerHomeState extends State<VelocityCustomerHome> {
       context: context,
       builder: (_) => AlertDialog(
         icon: const Icon(Icons.check_circle, color: VColors.ok, size: 44),
-        title: const Text('Request sent'),
+        title: const Text('Ticket started'),
         content: Text(
             'Your ticket number is ${result['number']}.\n\nA Velocity technician will contact you soon. Keep this app running so they can reach you.',
             textAlign: TextAlign.center),
@@ -366,7 +366,7 @@ class _EnrollViewState extends State<_EnrollView> {
   }
 }
 
-/* ---------------- Request Support ---------------- */
+/* ---------------- Get help: start a support ticket ---------------- */
 
 class _RequestSupportDialog extends StatefulWidget {
   const _RequestSupportDialog();
@@ -411,11 +411,16 @@ class _RequestSupportDialogState extends State<_RequestSupportDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Request Support'),
+      title: const Text('Get help'),
       content: SizedBox(
         width: 380,
         child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text(
+              'Start a support ticket. Tell us what is wrong and a Velocity technician will get back to you.',
+              style: TextStyle(fontSize: 13, color: VColors.muted, height: 1.4),
+            ),
+            const SizedBox(height: 14),
             DropdownButtonFormField<String>(
               value: _category,
               isExpanded: true,
@@ -449,7 +454,7 @@ class _RequestSupportDialogState extends State<_RequestSupportDialog> {
         ElevatedButton(
           style: vPrimaryButton(height: 40),
           onPressed: _busy ? null : _send,
-          child: Text(_busy ? 'Sending…' : 'Send request'),
+          child: Text(_busy ? 'Starting…' : 'Start ticket'),
         ),
       ],
     );
