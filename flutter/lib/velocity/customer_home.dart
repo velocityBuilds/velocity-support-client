@@ -400,6 +400,22 @@ class _EnrollViewState extends State<_EnrollView> {
   }
 }
 
+/// A form's error, shown at the top so it is never scrolled out of sight.
+class _FormError extends StatelessWidget {
+  final String text;
+  const _FormError(this.text);
+  @override
+  Widget build(BuildContext context) => Container(
+        margin: const EdgeInsets.only(top: 12),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+            color: const Color(0xFFFDECEA),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFF1B5AE))),
+        child: Text(text, style: const TextStyle(color: VColors.danger, fontSize: 13)),
+      );
+}
+
 /* ---------------- Get help before linking (the website's public request form) ---------------- */
 
 class _GuestHelpDialog extends StatefulWidget {
@@ -457,6 +473,7 @@ class _GuestHelpDialogState extends State<_GuestHelpDialog> {
               'Start a support ticket. Tell us how to reach you and what is wrong.',
               style: TextStyle(fontSize: 13, color: VColors.muted, height: 1.4),
             ),
+            if (_error.isNotEmpty) _FormError(_error),
             const SizedBox(height: 14),
             TextField(controller: _name, maxLength: 120, decoration: vInput('Your name')),
             const SizedBox(height: 4),
@@ -479,7 +496,6 @@ class _GuestHelpDialogState extends State<_GuestHelpDialog> {
                 maxLines: 5,
                 maxLength: 9000,
                 decoration: vInput('What is happening?', hint: 'When did it start? Any error messages?')),
-            if (_error.isNotEmpty) Text(_error, style: const TextStyle(color: VColors.danger, fontSize: 13)),
           ]),
         ),
       ),
@@ -549,6 +565,7 @@ class _RequestSupportDialogState extends State<_RequestSupportDialog> {
               'Start a support ticket. Tell us what is wrong and a Velocity technician will get back to you.',
               style: TextStyle(fontSize: 13, color: VColors.muted, height: 1.4),
             ),
+            if (_error.isNotEmpty) _FormError(_error),
             const SizedBox(height: 14),
             DropdownButtonFormField<String>(
               value: _category,
@@ -571,8 +588,6 @@ class _RequestSupportDialogState extends State<_RequestSupportDialog> {
                 maxLength: 10000,
                 decoration: vInput('What is happening?',
                     hint: 'When did it start? Any error messages?')),
-            if (_error.isNotEmpty)
-              Text(_error, style: const TextStyle(color: VColors.danger, fontSize: 13)),
           ]),
         ),
       ),

@@ -634,6 +634,14 @@ pub async fn ui_call(op: &str, args: &str) -> String {
         notify(arg(&args, "title"), arg(&args, "body"));
         return json!({ "ok": true }).to_string();
     }
+    if op == "guest_ticket" && !is_technician() {
+        // Public form, no device secret: send it from the app window itself, so it works even when
+        // the background service is an older copy or not running.
+        return match guest_ticket(&args).await {
+            Ok(v) => json!({ "ok": true, "data": v }).to_string(),
+            Err(e) => json!({ "ok": false, "error": e }).to_string(),
+        };
+    }
     if is_technician() {
         return json!({ "ok": false, "error": "Not available." }).to_string();
     }
