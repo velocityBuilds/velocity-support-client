@@ -260,6 +260,16 @@ pub async fn ipc_handle(req: String) -> String {
         "enroll" => enroll(&args).await,
         "ticket" => create_ticket(&args).await,
         "guest_ticket" => guest_ticket(&args).await,
+        "tickets" => device_get("/api/device/tickets").await,
+        "ticket_view" => {
+            let id = arg(&args, "id");
+            if id.len() != 36 || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+                Err("Unknown ticket.".to_owned())
+            } else {
+                device_get(&format!("/api/device/tickets/{id}")).await
+            }
+        }
+        "ticket_reply" => ticket_reply(&args).await,
         "respond" => respond(&args).await,
         "unenroll" => unenroll().await,
         "refresh" => {
@@ -375,6 +385,30 @@ Sent from Velocity Remote Support on {} (remote ID {}, not linked yet).",
     match http("POST", "/api/public/tickets", Some(body), None, None).await {
         Ok((200 | 201, v)) => Ok(v),
         Ok((_, v)) => Err(error_message(&v, "Could not send your request.")),
+        Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
+    }
+}
+
+/// Ticket viewer: GET with this PC's credential (the service holds it, the UI never sees it).
+async fn device_get(path: &str) -> Result<Value, String> {
+    let auth = device_auth().ok_or("This computer is not linked to Velocity yet.")?;
+    match http("GET", path, None, Some(&auth), None).await {
+        Ok((200, v)) => Ok(v),
+        Ok((_, v)) => Err(error_message(&v, "Could not load your tickets.")),
+        Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
+    }
+}
+
+async fn ticket_reply(args: &Value) -> Result<Value, String> {
+    let auth = device_auth().ok_or("This computer is not linked to Velocity yet.")?;
+    let id = arg(args, "id");
+    if id.len() != 36 || !id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return Err("Unknown ticket.".into());
+    }
+    let body = json!({ "body": arg(args, "body") });
+    match http("POST", &format!("/api/device/tickets/{id}/messages"), Some(body), Some(&auth), None).await {
+        Ok((201, v)) => Ok(v),
+        Ok((_, v)) => Err(error_message(&v, "Could not send your message.")),
         Err(_) => Err("Can't reach Velocity right now. Check your internet connection.".into()),
     }
 }

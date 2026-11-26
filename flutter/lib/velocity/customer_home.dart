@@ -195,6 +195,15 @@ class _VelocityCustomerHomeState extends State<VelocityCustomerHome> {
           icon: const Icon(Icons.support_agent, size: 26),
           label: const Text('Get help'),
         ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          style: vSecondaryButton(height: 46),
+          onPressed: online
+              ? () => showDialog(context: context, builder: (_) => const _TicketsDialog())
+              : null,
+          icon: const Icon(Icons.forum_outlined, size: 20),
+          label: const Text('My tickets'),
+        ),
         const SizedBox(height: 8),
         const Text(
           'A technician can only connect after you click Accept. You can end the connection at any time.',
@@ -396,6 +405,274 @@ class _EnrollViewState extends State<_EnrollView> {
         const Text("Don't have a code? Call or email Velocity Builds And Repairs.",
             textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: VColors.muted)),
       ]),
+    );
+  }
+}
+
+/* ---------------- Ticket viewer (linked PCs: this computer's tickets) ---------------- */
+
+String _when(dynamic iso) {
+  final d = DateTime.tryParse(iso?.toString() ?? '')?.toLocal();
+  if (d == null) return '';
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+  final m = d.minute.toString().padLeft(2, '0');
+  return '${months[d.month - 1]} ${d.day}, $h:$m ${d.hour < 12 ? 'AM' : 'PM'}';
+}
+
+class _TicketsDialog extends StatefulWidget {
+  const _TicketsDialog();
+  @override
+  State<_TicketsDialog> createState() => _TicketsDialogState();
+}
+
+class _TicketsDialogState extends State<_TicketsDialog> {
+  List<Map<String, dynamic>>? _tickets;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final r = await velocityCall('tickets');
+    if (!mounted) return;
+    setState(() {
+      if (r.ok && r.data is Map && (r.data as Map)['tickets'] is List) {
+        _tickets = ((r.data as Map)['tickets'] as List).map((t) => Map<String, dynamic>.from(t as Map)).toList();
+        _error = '';
+      } else {
+        _tickets = [];
+        _error = r.ok ? 'Unexpected answer from Velocity.' : r.error;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = _tickets;
+    return AlertDialog(
+      title: const Text('My tickets'),
+      content: SizedBox(
+        width: 440,
+        height: 380,
+        child: list == null
+            ? const Center(child: CircularProgressIndicator())
+            : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                if (_error.isNotEmpty) _FormError(_error),
+                if (list.isEmpty && _error.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Text('No tickets for this computer yet. Click Get help to start one.',
+                        textAlign: TextAlign.center, style: TextStyle(color: VColors.muted)),
+                  ),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: list.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (_, i) {
+                      final t = list[i];
+                      return ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                        title: Text('${t['number'] ?? ''} · ${t['subject'] ?? ''}',
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                        subtitle: Text('Updated ${_when(t['updatedAt'])}', style: const TextStyle(fontSize: 12)),
+                        trailing: _Pill(text: (t['status'] ?? '').toString()),
+                        onTap: () async {
+                          await showDialog(context: context, builder: (_) => _TicketView(id: t['id'].toString()));
+                          _load();
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ]),
+      ),
+      actions: [
+        TextButton(onPressed: _load, child: const Text('Refresh')),
+        ElevatedButton(style: vPrimaryButton(height: 40), onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+      ],
+    );
+  }
+}
+
+class _TicketView extends StatefulWidget {
+  final String id;
+  const _TicketView({required this.id});
+  @override
+  State<_TicketView> createState() => _TicketViewState();
+}
+
+class _TicketViewState extends State<_TicketView> {
+  Map<String, dynamic>? _t;
+  String _error = '';
+  bool _sending = false;
+  final _reply = TextEditingController();
+  final _scroll = ScrollController();
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    // New replies from the shop show up while the ticket is open.
+    _timer = Timer.periodic(const Duration(seconds: 20), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _reply.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final r = await velocityCall('ticket_view', {'id': widget.id});
+    if (!mounted) return;
+    setState(() {
+      if (r.ok && r.data is Map && (r.data as Map)['ticket'] is Map) {
+        final before = (_t?['messages'] as List?)?.length ?? -1;
+        _t = Map<String, dynamic>.from((r.data as Map)['ticket'] as Map);
+        _error = '';
+        final after = (_t!['messages'] as List?)?.length ?? 0;
+        if (after != before) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
+          });
+        }
+      } else if (_t == null) {
+        _error = r.ok ? 'Unexpected answer from Velocity.' : r.error;
+      }
+    });
+  }
+
+  Future<void> _send() async {
+    final text = _reply.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _sending = true;
+      _error = '';
+    });
+    final r = await velocityCall('ticket_reply', {'id': widget.id, 'body': text});
+    if (!mounted) return;
+    setState(() => _sending = false);
+    if (r.ok) {
+      _reply.clear();
+      _load();
+    } else {
+      setState(() => _error = r.error);
+    }
+  }
+
+  Widget _bubble(Map m) {
+    final type = (m['authorType'] ?? '').toString();
+    if (type == 'system') {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Text('${m['body'] ?? ''}',
+            textAlign: TextAlign.center, style: const TextStyle(fontSize: 12, color: VColors.muted)),
+      );
+    }
+    final mine = type == 'customer';
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 360),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: mine ? const Color(0xFFE8EEFC) : const Color(0xFFF4F6FA),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: VColors.border),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${mine ? 'You' : (m['authorName'] ?? 'Velocity')} · ${_when(m['createdAt'])}',
+              style: const TextStyle(fontSize: 11, color: VColors.muted, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          SelectableText('${m['body'] ?? ''}', style: const TextStyle(fontSize: 14, color: VColors.text)),
+        ]),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = _t;
+    final messages = (t?['messages'] as List?) ?? const [];
+    final files = (t?['attachments'] as List?) ?? const [];
+    final closed = t?['status'] == 'Closed';
+    final resolved = t?['status'] == 'Resolved';
+    return AlertDialog(
+      title: t == null
+          ? const Text('Ticket')
+          : Row(children: [
+              Expanded(
+                child: Text('${t['number']} · ${t['subject']}', overflow: TextOverflow.ellipsis),
+              ),
+              _Pill(text: (t['status'] ?? '').toString()),
+            ]),
+      content: SizedBox(
+        width: 520,
+        height: 460,
+        child: t == null
+            ? (_error.isNotEmpty ? Center(child: _FormError(_error)) : const Center(child: CircularProgressIndicator()))
+            : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                if (_error.isNotEmpty) _FormError(_error),
+                Expanded(
+                  child: ListView(controller: _scroll, children: [
+                    // The original request first, then the conversation.
+                    _bubble({'authorType': 'customer', 'body': t['description'], 'createdAt': t['createdAt']}),
+                    ...messages.map((m) => _bubble(m as Map)),
+                    if (files.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                            'Files: ${files.map((f) => (f as Map)['originalName']).join(', ')} (open them in your Velocity customer portal)',
+                            style: const TextStyle(fontSize: 12, color: VColors.muted)),
+                      ),
+                  ]),
+                ),
+                const SizedBox(height: 8),
+                if (resolved)
+                  const Text('This ticket is resolved. Replying reopens it.',
+                      style: TextStyle(fontSize: 12, color: VColors.muted)),
+                if (closed)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Text('This ticket is closed. Click Get help to start a new one.',
+                        style: TextStyle(fontSize: 13, color: VColors.muted)),
+                  )
+                else
+                Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _reply,
+                      minLines: 1,
+                      maxLines: 4,
+                      maxLength: 10000,
+                      decoration: vInput('Write a reply'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 22),
+                    child: ElevatedButton(
+                      style: vPrimaryButton(height: 44),
+                      onPressed: _sending ? null : _send,
+                      child: Text(_sending ? 'Sending…' : 'Send'),
+                    ),
+                  ),
+                ]),
+              ]),
+      ),
+      actions: [
+        TextButton(onPressed: _load, child: const Text('Refresh')),
+        ElevatedButton(style: vPrimaryButton(height: 40), onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+      ],
     );
   }
 }
